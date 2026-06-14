@@ -1,0 +1,24 @@
+{
+  "name": "lenden-api",
+  "version": "1.0.0",
+  "description": "Lenden POS API on Cloudflare Workers",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:create": "wrangler d1 execute lenden-db --local --file=./schema.sql",
+    "db:seed": "wrangler d1 execute lenden-db --local --file=./seed.sql",
+    "db:remote:create": "wrangler d1 execute lenden-db --remote --file=./schema.sql",
+    "db:remote:seed": "wrangler d1 execute lenden-db --remote --file=./seed.sql"
+  },
+  "dependencies": {
+    "hono": "^4.10.0",
+    "@tsndr/cloudflare-worker-jwt": "^3.1.0",
+    "bcryptjs": "^3.0.3",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "wrangler": "^4.98.0"
+  }
+}

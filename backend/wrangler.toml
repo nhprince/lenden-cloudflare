@@ -1,0 +1,17 @@
+name = "lenden-api"
+main = "src/index.js"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "lenden-db"
+database_id = "cb715771-df50-4bd6-8c67-8ffef9ee4c0e"
+
+
+
+[triggers]
+crons = ["0 22 * * *", "0 9 1 * *"]
+
+[vars]
+FRONTEND_ORIGIN = "https://lenden.pages.dev"
