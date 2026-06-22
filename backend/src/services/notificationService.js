@@ -1,9 +1,9 @@
 export async function createNotification(env, { shop_id, user_id = null, type, title, message, action_url = null, data = null, icon = 'notifications', scheduled_for = null }) {
   try {
     await env.DB.prepare(
-      `INSERT INTO notifications (shop_id, user_id, type, title, message, action_url, data, icon, scheduled_for)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(shop_id, user_id, type, title, message, action_url, data ? JSON.stringify(data) : null, icon, scheduled_for).run();
+      `INSERT INTO notifications (shop_id, user_id, type, title, message, action_url, data, scheduled_for)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(shop_id, user_id, type, title, message, action_url, data ? JSON.stringify(data) : null, scheduled_for).run();
     return true;
   } catch (error) {
     console.error('Failed to create notification:', error);

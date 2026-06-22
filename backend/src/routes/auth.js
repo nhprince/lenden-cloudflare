@@ -31,7 +31,12 @@ authRoutes.post('/register', async (c) => {
       'INSERT INTO shops (name, owner_id, business_type) VALUES (?, ?, ?)'
     ).bind(shopName || `${name}'s Shop`, userId, 'bike_sales').run();
 
-    try { await createOnboardingNotifications({ shop_id: shopResult.meta.last_row_id }, c.env); } catch (e) { console.error(e); }
+    // Auto-verify and generate token
+    await c.env.DB.prepare('UPDATE users SET is_verified = 1 WHERE id = ?').bind(userId).run();
+    const payload = { id: userId, role: 'owner' };
+    const token = await jwt.sign(payload, c.env.JWT_SECRET);
+
+    try { await createOnboardingNotifications(c.env, shopResult.meta.last_row_id); } catch (e) { console.error(e); }
 
     const verificationLink = `${FRONTEND_ORIGIN}/#/verify-email/${verificationToken}`;
     const emailBody = getEmailTemplate('Confirm Your Registration',
@@ -47,7 +52,12 @@ authRoutes.post('/register', async (c) => {
       });
     }
 
-    return c.json({ message: 'User registered successfully. Please check your email to verify your account.', userId }, 201);
+    return c.json({
+      message: 'User registered successfully.',
+      userId,
+      token,
+      user: { id: userId, name, email, role: 'owner', shopId: shopResult.meta.last_row_id }
+    }, 201);
   } catch (error) {
     console.error('Register error:', error);
     return c.json({ message: 'Server error' }, 500);
@@ -84,9 +94,16 @@ authRoutes.post('/login', async (c) => {
 
     const token = await jwt.sign(payload, c.env.JWT_SECRET);
 
+    // Fetch shop info for response
+    let userShopId = user.shop_id || null;
+    if (!userShopId && userType === 'owner') {
+      const ownerShop = await c.env.DB.prepare('SELECT id FROM shops WHERE owner_id = ?').bind(user.id).first();
+      userShopId = ownerShop?.id || null;
+    }
+
     return c.json({
       token,
-      user: { id: user.id, name: user.name, username: user.username || null, email: user.email, role: user.role || userType, shopId: user.shop_id || null }
+      user: { id: user.id, name: user.name, username: user.username || null, email: user.email, role: user.role || userType, shopId: userShopId }
     });
   } catch (error) {
     console.error('Login error:', error);
@@ -149,7 +166,7 @@ authRoutes.post('/reset-password', async (c) => {
     await c.env.DB.prepare('UPDATE users SET password = ?, reset_token = NULL, reset_expires = NULL WHERE id = ?').bind(hashedPassword, user.id).run();
 
     const shops = await c.env.DB.prepare('SELECT id FROM shops WHERE owner_id = ?').bind(user.id).first();
-    if (shops) await createPasswordResetNotification({ user_id: user.id, shop_id: shops.id }, c.env);
+    if (shops) await createPasswordResetNotification(c.env, { user_id: user.id, shop_id: shops.id });
 
     return c.json({ message: 'Password reset successfully' });
   } catch (error) {
@@ -213,7 +230,7 @@ authRoutes.get('/me', async (c) => {
     const isValid = await jwt.verify(token, c.env.JWT_SECRET);
     if (!isValid) return c.json({ message: 'Token is not valid' }, 401);
     const decoded = jwt.decode(token);
-    return c.json(decoded);
+    return c.json(decoded.payload || decoded);
   } catch (err) {
     return c.json({ message: 'Token is not valid' }, 401);
   }
@@ -228,10 +245,11 @@ authRoutes.post('/change-password', async (c) => {
     const isValid = await jwt.verify(token, c.env.JWT_SECRET);
     if (!isValid) return c.json({ message: 'Token is not valid' }, 401);
     const decoded = jwt.decode(token);
+    const payload = decoded.payload || decoded;
     const { oldPassword, newPassword } = await c.req.json();
 
-    const table = (decoded.role === 'owner' || decoded.role === 'admin') ? 'users' : 'staff';
-    const user = await c.env.DB.prepare(`SELECT password FROM ${table} WHERE id = ?`).bind(decoded.id).first();
+    const table = (payload.role === 'owner' || payload.role === 'admin') ? 'users' : 'staff';
+    const user = await c.env.DB.prepare(`SELECT password FROM ${table} WHERE id = ?`).bind(payload.id).first();
     if (!user) return c.json({ message: 'User not found' }, 404);
 
     const isMatch = await bcrypt.compare(oldPassword, user.password);
@@ -239,7 +257,7 @@ authRoutes.post('/change-password', async (c) => {
 
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(newPassword, salt);
-    await c.env.DB.prepare(`UPDATE ${table} SET password = ? WHERE id = ?`).bind(hashedPassword, decoded.id).run();
+    await c.env.DB.prepare(`UPDATE ${table} SET password = ? WHERE id = ?`).bind(hashedPassword, payload.id).run();
 
     return c.json({ message: 'Password changed successfully' });
   } catch (error) {
@@ -257,17 +275,18 @@ authRoutes.post('/avatar', async (c) => {
     const isValid = await jwt.verify(token, c.env.JWT_SECRET);
     if (!isValid) return c.json({ message: 'Token is not valid' }, 401);
     const decoded = jwt.decode(token);
+    const payload = decoded.payload || decoded;
 
     const formData = await c.req.formData();
     const file = formData.get('avatar');
     if (!file || !(file instanceof File)) return c.json({ message: 'No file uploaded' }, 400);
 
     const ext = file.name?.split('.').pop() || 'png';
-    const filename = `avatars/avatar-${decoded.id}-${Date.now()}-${Math.round(Math.random() * 1E9)}.${ext}`;
+    const filename = `avatars/avatar-${payload.id}-${Date.now()}-${Math.round(Math.random() * 1E9)}.${ext}`;
     await c.env.BUCKET.put(filename, file);
     const avatarUrl = `/files/${filename}`;
 
-    await c.env.DB.prepare('UPDATE users SET avatar_url = ? WHERE id = ?').bind(avatarUrl, decoded.id).run();
+    await c.env.DB.prepare('UPDATE users SET avatar_url = ? WHERE id = ?').bind(avatarUrl, payload.id).run();
     return c.json({ message: 'Avatar uploaded successfully', avatarUrl });
   } catch (error) {
     console.error('Avatar upload error:', error);
@@ -284,9 +303,10 @@ authRoutes.put('/profile', async (c) => {
     const isValid = await jwt.verify(token, c.env.JWT_SECRET);
     if (!isValid) return c.json({ message: 'Token is not valid' }, 401);
     const decoded = jwt.decode(token);
+    const payload = decoded.payload || decoded;
     const { name, email } = await c.req.json();
 
-    await c.env.DB.prepare('UPDATE users SET name = ?, email = ? WHERE id = ?').bind(name, email, decoded.id).run();
+    await c.env.DB.prepare('UPDATE users SET name = ?, email = ? WHERE id = ?').bind(name, email, payload.id).run();
     return c.json({ message: 'Profile updated successfully' });
   } catch (error) {
     console.error(error);
@@ -303,14 +323,15 @@ authRoutes.get('/recovery-code', async (c) => {
     const isValid = await jwt.verify(token, c.env.JWT_SECRET);
     if (!isValid) return c.json({ message: 'Token is not valid' }, 401);
     const decoded = jwt.decode(token);
+    const payload = decoded.payload || decoded;
 
-    const user = await c.env.DB.prepare('SELECT recovery_code FROM users WHERE id = ?').bind(decoded.id).first();
+    const user = await c.env.DB.prepare('SELECT recovery_code FROM users WHERE id = ?').bind(payload.id).first();
     if (!user) return c.json({ message: 'User not found' }, 404);
 
     let code = user.recovery_code;
     if (!code) {
       code = Math.random().toString(36).substring(2, 10).toUpperCase();
-      await c.env.DB.prepare('UPDATE users SET recovery_code = ? WHERE id = ?').bind(code, decoded.id).run();
+      await c.env.DB.prepare('UPDATE users SET recovery_code = ? WHERE id = ?').bind(code, payload.id).run();
     }
 
     return c.json({ recovery_code: code });

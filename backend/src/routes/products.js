@@ -64,7 +64,29 @@ productRoutes.post('/', async (c) => {
     'INSERT INTO products (shop_id, name, category, sku, cost_price, selling_price, stock_quantity, unit, engine_no, chassis_no, model_year, min_stock_level, material_cost, image_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   ).bind(shop_id, name, category || 'General', sku, finalCostPrice, selling_price, parseInt(stock_quantity) || 0, unit || 'pcs', engine_no || null, chassis_no || null, model_year || null, parseInt(min_stock_level) || 5, finalMaterialCost, image_url || null).run();
 
-  return c.json({ message: 'Product added successfully', productId: result.meta.last_row_id }, 201);
+  const productId = result.meta.last_row_id;
+
+  // Low stock alert on create
+  const stockQty = parseInt(stock_quantity) || 0;
+  const minStockLvl = parseInt(min_stock_level) || 5;
+  if (stockQty <= minStockLvl) {
+    try {
+      console.log('LOW STOCK CHECK: creating notification for', name, 'shop_id:', shop_id, 'qty:', stockQty, 'min:', minStockLvl);
+      const notifResult = await createLowStockNotification(c.env, { shop_id, product_name: name, current_stock: stockQty, min_stock: minStockLvl, product_id: productId });
+      console.log('LOW STOCK RESULT:', notifResult, 'type:', typeof notifResult);
+    } catch (e) { console.error('LOW STOCK ERROR:', String(e)); }
+  } else {
+    console.log('LOW STOCK CHECK: NOT triggered, qty:', stockQty, 'min:', minStockLvl);
+  }
+
+  return c.json({ message: 'Product added successfully', productId }, 201);
+});
+
+// GET /api/products/low-stock
+productRoutes.get('/low-stock', async (c) => {
+  const shop_id = c.get('shopId');
+  const products = await c.env.DB.prepare('SELECT * FROM products WHERE shop_id = ? AND stock_quantity <= min_stock_level ORDER BY stock_quantity ASC').bind(shop_id).all();
+  return c.json(products.results);
 });
 
 // GET /api/products/:id
@@ -102,7 +124,7 @@ productRoutes.put('/:id', async (c) => {
   // Low stock alert
   if (stock_quantity <= (min_stock_level || existing.min_stock_level)) {
     try {
-      await createLowStockNotification({ shop_id, product_name: name || existing.name, current_stock: stock_quantity, min_stock: min_stock_level || existing.min_stock_level, product_id: parseInt(id) }, c.env);
+      await createLowStockNotification(c.env, { shop_id, product_name: name || existing.name, current_stock: stock_quantity, min_stock: min_stock_level || existing.min_stock_level, product_id: parseInt(id) });
     } catch (e) { console.error('Low stock alert error:', e); }
   }
 
@@ -134,11 +156,4 @@ productRoutes.post('/:id/image', async (c) => {
 
   await c.env.DB.prepare('UPDATE products SET image_url = ? WHERE id = ? AND shop_id = ?').bind(imageUrl, id, shop_id).run();
   return c.json({ message: 'Product image uploaded', imageUrl });
-});
-
-// GET /api/products/low-stock
-productRoutes.get('/low-stock', async (c) => {
-  const shop_id = c.get('shopId');
-  const products = await c.env.DB.prepare('SELECT * FROM products WHERE shop_id = ? AND stock_quantity <= min_stock_level ORDER BY stock_quantity ASC').bind(shop_id).all();
-  return c.json(products.results);
 });

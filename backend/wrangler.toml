@@ -14,4 +14,4 @@ database_id = "cb715771-df50-4bd6-8c67-8ffef9ee4c0e"
 crons = ["0 22 * * *", "0 9 1 * *"]
 
 [vars]
-FRONTEND_ORIGIN = "https://lenden.pages.dev"
+FRONTEND_ORIGIN = "https://lenden-dbz.pages.dev"
